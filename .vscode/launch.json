@@ -1,0 +1,72 @@
+{
+    /* 
+     * Requires the Rust Language Server (RLS) and Cortex-Debug extensions
+     * https://marketplace.visualstudio.com/items?itemName=rust-lang.rust
+     * https://marketplace.visualstudio.com/items?itemName=marus25.cortex-debug
+     */
+    "version": "0.2.0",
+    "configurations": [
+        {
+            /* Configuration for the STM32F103C8T6 blue pill board */
+            "type": "cortex-debug",
+            "request": "launch",
+            "name": "Debug (Launch OpenOCD)",
+            "servertype": "openocd",
+            "postLaunchCommands": [
+                "monitor arm semihosting enable"
+            ],
+            "cwd": "${workspaceRoot}",
+            "preLaunchTask": "Cargo Build (debug)",
+            "runToMain": true,
+            "executable": "./target/thumbv7m-none-eabi/debug/bluepill-exp",
+            "device": "STM32F103C8T6",
+            "configFiles": [
+                "interface/stlink-v2.cfg",
+                "target/stm32f1x.cfg"
+            ],
+            "svdFile": "${workspaceRoot}/.vscode/STM32F103.svd",
+            "swoConfig": {
+                "enabled": true,
+                "cpuFrequency": 72000000,
+                "swoFrequency": 2000000,
+                "source": "probe",
+                "decoders": [
+                    {
+                        "type": "console",
+                        "label": "ITM",
+                        "port": 0
+                    }
+                ]
+            }
+        },
+        {
+            /* Configuration for the STM32F103C8T6 blue pill board */
+            "type": "cortex-debug",
+            "request": "attach",
+            "name": "Debug (Attach OpenOCD)",
+            "servertype": "openocd",
+            "cwd": "${workspaceRoot}",
+            "preLaunchTask": "Cargo Build (debug)",
+            "executable": "./target/thumbv7m-none-eabi/debug/bluepill-exp",
+            "device": "STM32F103C8T6",
+            "configFiles": [
+                "interface/stlink-v2.cfg",
+                "target/stm32f1x.cfg"
+            ],
+            "svdFile": "${workspaceRoot}/.vscode/STM32F103.svd",
+            "swoConfig": {
+                "enabled": true,
+                "cpuFrequency": 72000000,
+                "swoFrequency": 2000000,
+                "source": "probe",
+                "decoders": [
+                    {
+                        "type": "console",
+                        "label": "ITM",
+                        "port": 0
+                    }
+                ]
+            }
+        }
+    ]
+}
