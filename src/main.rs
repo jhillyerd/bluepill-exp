@@ -1,9 +1,6 @@
 #![no_main]
 #![no_std]
 
-// set the panic handler
-use panic_semihosting as _;
-
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use cortex_m_rt::entry;
@@ -85,4 +82,11 @@ fn EXTI15_10() {
     button.clear_interrupt_pending_bit();
 
     rprintln!("steps: {} -> {}", steps, new_steps);
+}
+
+#[inline(never)]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    rprintln!("{}", info);
+    loop {}
 }
