@@ -1,88 +1,104 @@
 #![no_main]
 #![no_std]
 
-use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicUsize, Ordering};
-use cortex_m_rt::entry;
 use embedded_hal::digital::v2::*;
-use nb::block;
-use pac::interrupt;
+// use pac::interrupt;
+use rtic::app;
 use rtt_target::rprintln;
 use stm32f1xx_hal::{gpio::*, pac, prelude::*};
 
-const MAX_STEPS: usize = 10;
-static STEPS: AtomicUsize = AtomicUsize::new(1);
+const _CYCLES_PER_STEP: usize = 80_000;
+const _MAX_STEPS: usize = 10;
 
-static mut BUTTON: MaybeUninit<gpioa::PA10<Input<PullUp>>> = MaybeUninit::uninit();
-
-#[entry]
-fn main() -> ! {
-    rtt_target::rtt_init_print!();
-    let cp = cortex_m::Peripherals::take().unwrap();
-    let dp = pac::Peripherals::take().unwrap();
-    let mut flash = dp.FLASH.constrain();
-    let mut rcc = dp.RCC.constrain();
-
-    let clocks = rcc.cfgr.freeze(&mut flash.acr);
-
-    let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
-    let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
-    let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
-
-    // Configure pc13 as output via CR high register.
-    let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
-
-    let mut pa4 = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
-
-    let mut timer = stm32f1xx_hal::timer::Timer::syst(cp.SYST, &clocks).start_count_down(90.hz());
-
-    led.set_high().unwrap(); // LED off
-    pa4.set_low().unwrap(); // Oscill low
-
-    // Setup pa10 button interrupt.  Safety: Will not be accessed from anywhere but the interrupt
-    // handler after we initialize.
-    {
-        let button = unsafe { &mut *BUTTON.as_mut_ptr() };
-        *button = gpioa.pa10.into_pull_up_input(&mut gpioa.crh);
-        button.make_interrupt_source(&mut afio);
-        button.trigger_on_edge(&dp.EXTI, Edge::FALLING);
-        button.enable_interrupt(&dp.EXTI);
+#[app(device = stm32f1xx_hal::pac, peripherals = true)]
+const APP: () = {
+    struct Resources {
+        #[init(0)]
+        steps: usize,
+        led: gpioc::PC13<Output<PushPull>>,
     }
 
-    unsafe {
-        // Pins 10-15 are on the 15-10 EXTI.
-        pac::NVIC::unmask(pac::Interrupt::EXTI15_10);
+    #[init]
+    fn init(cx: init::Context) -> init::LateResources {
+        rtt_target::rtt_init_print!();
+
+        let dp = cx.device;
+        let mut flash = dp.FLASH.constrain();
+        let mut rcc = dp.RCC.constrain();
+
+        // Freeze clock configuration.
+        let _clocks = rcc.cfgr.freeze(&mut flash.acr);
+
+        let mut _afio = dp.AFIO.constrain(&mut rcc.apb2);
+        // let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
+        let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
+
+        // Configure pc13 as output via CR high register.
+        let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
+        led.set_high().unwrap(); // LED off
+
+        // let mut pa4 = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
+
+        // pa4.set_low().unwrap(); // Oscill low
+
+        // // Setup pa10 button interrupt.  Safety: Will not be accessed from anywhere but the interrupt
+        // // handler after we initialize.
+        // {
+        //     let button = unsafe { &mut *BUTTON.as_mut_ptr() };
+        //     *button = gpioa.pa10.into_pull_up_input(&mut gpioa.crh);
+        //     button.make_interrupt_source(&mut afio);
+        //     button.trigger_on_edge(&dp.EXTI, Edge::FALLING);
+        //     button.enable_interrupt(&dp.EXTI);
+        // }
+
+        // unsafe {
+        //     // Pins 10-15 are on the 15-10 EXTI.
+        //     pac::NVIC::unmask(pac::Interrupt::EXTI15_10);
+        // }
+
+        rprintln!("rtic init complete");
+
+        init::LateResources { led }
     }
 
-    let mut counter = 0;
-
-    rprintln!("starting main loop");
-
-    loop {
-        block!(timer.wait()).unwrap();
-        counter += 1;
-        if counter >= STEPS.load(Ordering::Relaxed) {
-            counter = 0;
-            led.toggle().unwrap();
-            pa4.toggle().unwrap();
+    /// Define an idle function to prevent wait-for-interrupt from blocking the debugger.
+    ///
+    /// See: https://github.com/probe-rs/probe-rs/issues/350
+    #[idle]
+    fn idle(_: idle::Context) -> ! {
+        loop {
+            core::sync::atomic::spin_loop_hint();
         }
     }
-}
 
-#[interrupt]
-fn EXTI15_10() {
-    let button = unsafe { &mut *BUTTON.as_mut_ptr() };
-    if !button.check_interrupt() {
-        return;
+    #[task(resources = [led])]
+    fn blink_led(cx: blink_led::Context) {
+        cx.resources.led.toggle().unwrap();
+        // add schedule
+        // TODO based on steps
     }
 
-    let steps = STEPS.load(Ordering::Relaxed);
-    let new_steps = (steps % MAX_STEPS) + 1;
-    STEPS.compare_and_swap(steps, new_steps, Ordering::Relaxed);
-    button.clear_interrupt_pending_bit();
+    // Unused interrupts for task scheduling.
+    extern "C" {
+        fn EXTI0();
+    }
+};
 
-    rprintln!("steps: {} -> {}", steps, new_steps);
-}
+// #[interrupt]
+// fn EXTI15_10() {
+//     static mut BUTTON: MaybeUninit<gpioa::PA10<Input<PullUp>>> = MaybeUninit::uninit();
+//     let button = unsafe { &mut *BUTTON.as_mut_ptr() };
+//     if !button.check_interrupt() {
+//         return;
+//     }
+
+//     let steps = STEPS.load(Ordering::Relaxed);
+//     let new_steps = (steps % MAX_STEPS) + 1;
+//     STEPS.compare_and_swap(steps, new_steps, Ordering::Relaxed);
+//     button.clear_interrupt_pending_bit();
+
+//     rprintln!("steps: {} -> {}", steps, new_steps);
+// }
 
 #[inline(never)]
 #[panic_handler]
