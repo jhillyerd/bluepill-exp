@@ -10,6 +10,7 @@ use cortex_m_rt::entry;
 use embedded_hal::digital::v2::*;
 use nb::block;
 use pac::interrupt;
+use rtt_target::rprintln;
 use stm32f1xx_hal::{gpio::*, pac, prelude::*};
 
 const MAX_STEPS: usize = 10;
@@ -19,6 +20,7 @@ static mut BUTTON: MaybeUninit<gpioa::PA10<Input<PullUp>>> = MaybeUninit::uninit
 
 #[entry]
 fn main() -> ! {
+    rtt_target::rtt_init_print!();
     let cp = cortex_m::Peripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
     let mut flash = dp.FLASH.constrain();
@@ -57,6 +59,8 @@ fn main() -> ! {
 
     let mut counter = 0;
 
+    rprintln!("starting main loop");
+
     loop {
         block!(timer.wait()).unwrap();
         counter += 1;
@@ -71,13 +75,14 @@ fn main() -> ! {
 #[interrupt]
 fn EXTI15_10() {
     let button = unsafe { &mut *BUTTON.as_mut_ptr() };
-
-    if button.check_interrupt() {
-        STEPS
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |steps| {
-                Some((steps % MAX_STEPS) + 1)
-            })
-            .unwrap();
-        button.clear_interrupt_pending_bit();
+    if !button.check_interrupt() {
+        return;
     }
+
+    let steps = STEPS.load(Ordering::Relaxed);
+    let new_steps = (steps % MAX_STEPS) + 1;
+    STEPS.compare_and_swap(steps, new_steps, Ordering::Relaxed);
+    button.clear_interrupt_pending_bit();
+
+    rprintln!("steps: {} -> {}", steps, new_steps);
 }
