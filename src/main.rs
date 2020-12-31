@@ -4,13 +4,14 @@
 use embedded_hal::digital::v2::*;
 // use pac::interrupt;
 use rtic::app;
+use rtic::cyccnt::{Duration, U32Ext};
 use rtt_target::rprintln;
 use stm32f1xx_hal::{gpio::*, pac, prelude::*};
 
-const _CYCLES_PER_STEP: usize = 80_000;
+const CYCLES_PER_STEP: u32 = 80_000;
 const _MAX_STEPS: usize = 10;
 
-#[app(device = stm32f1xx_hal::pac, peripherals = true)]
+#[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
         #[init(0)]
@@ -18,9 +19,15 @@ const APP: () = {
         led: gpioc::PC13<Output<PushPull>>,
     }
 
-    #[init]
+    #[init(schedule = [blink_led])]
     fn init(cx: init::Context) -> init::LateResources {
         rtt_target::rtt_init_print!();
+        rprintln!("rtic init started");
+
+        let mut cp = cx.core;
+
+        // Enable cycle counter; used for scheduling.
+        cp.DWT.enable_cycle_counter();
 
         let dp = cx.device;
         let mut flash = dp.FLASH.constrain();
@@ -56,7 +63,11 @@ const APP: () = {
         //     pac::NVIC::unmask(pac::Interrupt::EXTI15_10);
         // }
 
-        rprintln!("rtic init complete");
+        cx.schedule
+            .blink_led(cx.start + CYCLES_PER_STEP.cycles())
+            .unwrap();
+
+        rprintln!("rtic init completed");
 
         init::LateResources { led }
     }
@@ -71,10 +82,14 @@ const APP: () = {
         }
     }
 
-    #[task(resources = [led])]
+    #[task(resources = [led], schedule = [blink_led])]
     fn blink_led(cx: blink_led::Context) {
         cx.resources.led.toggle().unwrap();
-        // add schedule
+
+        cx.schedule
+            .blink_led(cx.scheduled + Duration::from_cycles(CYCLES_PER_STEP * 5))
+            .unwrap();
+
         // TODO based on steps
     }
 
