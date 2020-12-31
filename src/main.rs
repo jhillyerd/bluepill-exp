@@ -58,19 +58,19 @@ const APP: () = {
             .blink_led(cx.start + CYCLES_PER_STEP.cycles())
             .unwrap();
 
+        // Prevent wait-for-interrupt (default rtic idle) from stalling debug features.
+        //
+        // See: https://github.com/probe-rs/probe-rs/issues/350
+        dp.DBGMCU.cr.modify(|_, w| {
+            w.dbg_sleep().set_bit();
+            w.dbg_standby().set_bit();
+            w.dbg_stop().set_bit()
+        });
+        let _dma1 = dp.DMA1.split(&mut rcc.ahb);
+
         rprintln!("rtic init completed");
 
         init::LateResources { led, button, scope }
-    }
-
-    /// Define an idle function to prevent wait-for-interrupt from blocking the debugger.
-    ///
-    /// See: https://github.com/probe-rs/probe-rs/issues/350
-    #[idle]
-    fn idle(_: idle::Context) -> ! {
-        loop {
-            core::sync::atomic::spin_loop_hint();
-        }
     }
 
     #[task(resources = [steps, led, scope], schedule = [blink_led])]
