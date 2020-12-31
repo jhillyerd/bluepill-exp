@@ -18,6 +18,7 @@ const APP: () = {
         steps: u32,
         led: gpioc::PC13<Output<PushPull>>,
         button: gpioa::PA10<Input<PullUp>>,
+        scope: gpioa::PA4<Output<PushPull>>,
     }
 
     #[init(schedule = [blink_led])]
@@ -46,8 +47,9 @@ const APP: () = {
         let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
         led.set_high().unwrap(); // LED off
 
-        // let mut pa4 = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
-        // pa4.set_low().unwrap(); // Oscill low
+        // Configure pa4 as output for oscilloscope.
+        let mut scope = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
+        scope.set_low().unwrap(); // Oscill low
 
         // Setup pa10 button interrupt.
         let mut button = gpioa.pa10.into_pull_up_input(&mut gpioa.crh);
@@ -61,7 +63,7 @@ const APP: () = {
 
         rprintln!("rtic init completed");
 
-        init::LateResources { led, button }
+        init::LateResources { led, button, scope }
     }
 
     /// Define an idle function to prevent wait-for-interrupt from blocking the debugger.
@@ -74,9 +76,10 @@ const APP: () = {
         }
     }
 
-    #[task(resources = [led, steps], schedule = [blink_led])]
+    #[task(resources = [steps, led, scope], schedule = [blink_led])]
     fn blink_led(mut cx: blink_led::Context) {
         cx.resources.led.toggle().unwrap();
+        cx.resources.scope.toggle().unwrap();
         let steps = cx.resources.steps.lock(|steps| *steps);
 
         // Schedule next blink.
