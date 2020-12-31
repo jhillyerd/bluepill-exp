@@ -1,26 +1,30 @@
 #![no_main]
 #![no_std]
 
+use debouncr::Debouncer;
 use embedded_hal::digital::v2::*;
 use rtic::app;
 use rtic::cyccnt::{Duration, U32Ext};
 use rtt_target::rprintln;
 use stm32f1xx_hal::{gpio::*, prelude::*};
 
-const CYCLES_PER_STEP: u32 = 200_000;
+const SYSCLK: u32 = 72_000_000;
+const BUTTON_POLL_PERIOD: u32 = SYSCLK / 100; // Hz
+const CYCLES_PER_STEP: u32 = 1_000_000;
 const MAX_STEPS: u32 = 10;
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        #[init(0)]
+        #[init(1)]
         steps: u32,
         led: gpioc::PC13<Output<PushPull>>,
         button: gpioa::PA10<Input<PullUp>>,
+        button_state: Debouncer<u8, debouncr::Repeat6>,
         scope: gpioa::PA4<Output<PushPull>>,
     }
 
-    #[init(schedule = [blink_led])]
+    #[init(spawn = [blink_led, poll_button])]
     fn init(cx: init::Context) -> init::LateResources {
         rtt_target::rtt_init_print!();
         rprintln!("RTIC init started");
@@ -36,8 +40,8 @@ const APP: () = {
         let clocks = rcc
             .cfgr
             .use_hse(8.mhz())
-            .sysclk(72.mhz())
-            .pclk1(36.mhz())
+            .sysclk(SYSCLK.hz())
+            .pclk1((SYSCLK / 2).hz())
             .freeze(&mut flash.acr);
         rprintln!(" SYSCLK: {:?} MHz", clocks.sysclk().0 / 1_000_000);
         rprintln!(" HCLK: {:?} MHz", clocks.hclk().0 / 1_000_000);
@@ -46,7 +50,7 @@ const APP: () = {
         rprintln!(" ADCCLK: {:?} MHz", clocks.adcclk().0 / 1_000_000);
 
         // Peripheral setup.
-        let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
+        let _afio = dp.AFIO.constrain(&mut rcc.apb2);
         let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
         let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
 
@@ -59,14 +63,13 @@ const APP: () = {
         scope.set_low().unwrap(); // Oscill low
 
         // Setup pa10 button interrupt.
-        let mut button = gpioa.pa10.into_pull_up_input(&mut gpioa.crh);
-        button.make_interrupt_source(&mut afio);
-        button.trigger_on_edge(&dp.EXTI, Edge::FALLING);
-        button.enable_interrupt(&dp.EXTI);
+        let button = gpioa.pa10.into_pull_up_input(&mut gpioa.crh);
+        // button.make_interrupt_source(&mut afio);
+        // button.trigger_on_edge(&dp.EXTI, Edge::FALLING);
+        // button.enable_interrupt(&dp.EXTI);
 
-        cx.schedule
-            .blink_led(cx.start + CYCLES_PER_STEP.cycles())
-            .unwrap();
+        cx.spawn.poll_button().unwrap();
+        cx.spawn.blink_led().unwrap();
 
         // Prevent wait-for-interrupt (default rtic idle) from stalling debug features.
         //
@@ -80,11 +83,17 @@ const APP: () = {
 
         rprintln!("RTIC init completed");
 
-        init::LateResources { led, button, scope }
+        init::LateResources {
+            led,
+            button,
+            button_state: debouncr::debounce_6(false),
+            scope,
+        }
     }
 
     #[task(resources = [steps, led, scope], schedule = [blink_led])]
     fn blink_led(cx: blink_led::Context) {
+        // TODO schedule using timer resource.
         let blink_led::Resources {
             mut steps,
             led,
@@ -100,17 +109,28 @@ const APP: () = {
         cx.schedule.blink_led(cx.scheduled + delay).unwrap();
     }
 
-    #[task(binds = EXTI15_10, priority = 2, resources = [button, steps])]
-    fn button_press(cx: button_press::Context) {
-        // TODO debounce
-        rprintln!("button pressed");
-
-        let button = cx.resources.button;
-        if !button.check_interrupt() {
-            return;
+    #[task(
+        priority = 2,
+        resources = [button, button_state],
+        spawn = [button_press],
+        schedule = [poll_button]
+    )]
+    fn poll_button(cx: poll_button::Context) {
+        // Button is active low.
+        let pressed = cx.resources.button.is_low().unwrap();
+        let edge = cx.resources.button_state.update(pressed);
+        if edge == Some(debouncr::Edge::Rising) {
+            cx.spawn.button_press().unwrap();
         }
-        button.clear_interrupt_pending_bit();
 
+        // Schedule next button poll.
+        cx.schedule
+            .poll_button(cx.scheduled + BUTTON_POLL_PERIOD.cycles())
+            .unwrap();
+    }
+
+    #[task(priority = 2, resources = [steps])]
+    fn button_press(cx: button_press::Context) {
         let steps = *cx.resources.steps;
         let new_steps = (steps % MAX_STEPS) + 1;
         *cx.resources.steps = new_steps;
