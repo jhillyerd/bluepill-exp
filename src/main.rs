@@ -23,19 +23,29 @@ const APP: () = {
     #[init(schedule = [blink_led])]
     fn init(cx: init::Context) -> init::LateResources {
         rtt_target::rtt_init_print!();
-        rprintln!("rtic init started");
+        rprintln!("RTIC init started");
         let mut cp = cx.core;
         let dp = cx.device;
 
         // Enable cycle counter; used for scheduling.
         cp.DWT.enable_cycle_counter();
 
-        // Freeze clock configuration.
+        // Setup and apply clock confiugration.
         let mut flash = dp.FLASH.constrain();
         let mut rcc = dp.RCC.constrain();
-        let clocks = rcc.cfgr.freeze(&mut flash.acr);
-        rprintln!("sysclk: {:?} MHz", clocks.sysclk().0 / 1_000_000);
+        let clocks = rcc
+            .cfgr
+            .use_hse(8.mhz())
+            .sysclk(72.mhz())
+            .pclk1(36.mhz())
+            .freeze(&mut flash.acr);
+        rprintln!(" SYSCLK: {:?} MHz", clocks.sysclk().0 / 1_000_000);
+        rprintln!(" HCLK: {:?} MHz", clocks.hclk().0 / 1_000_000);
+        rprintln!(" APB1 clk: {:?} MHz", clocks.pclk1().0 / 1_000_000);
+        rprintln!(" APB2 clk: {:?} MHz", clocks.pclk2().0 / 1_000_000);
+        rprintln!(" ADCCLK: {:?} MHz", clocks.adcclk().0 / 1_000_000);
 
+        // Peripheral setup.
         let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
         let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
         let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
@@ -68,7 +78,7 @@ const APP: () = {
         });
         let _dma1 = dp.DMA1.split(&mut rcc.ahb);
 
-        rprintln!("rtic init completed");
+        rprintln!("RTIC init completed");
 
         init::LateResources { led, button, scope }
     }
@@ -92,6 +102,7 @@ const APP: () = {
 
     #[task(binds = EXTI15_10, priority = 2, resources = [button, steps])]
     fn button_press(cx: button_press::Context) {
+        // TODO debounce
         rprintln!("button pressed");
 
         let button = cx.resources.button;
