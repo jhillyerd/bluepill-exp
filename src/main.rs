@@ -2,13 +2,12 @@
 #![no_std]
 
 use embedded_hal::digital::v2::*;
-use pac::interrupt;
 use rtic::app;
 use rtic::cyccnt::{Duration, U32Ext};
 use rtt_target::rprintln;
-use stm32f1xx_hal::{gpio::*, pac, prelude::*};
+use stm32f1xx_hal::{gpio::*, prelude::*};
 
-const CYCLES_PER_STEP: u32 = 80_000;
+const CYCLES_PER_STEP: u32 = 200_000;
 const MAX_STEPS: u32 = 10;
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
@@ -25,17 +24,15 @@ const APP: () = {
     fn init(cx: init::Context) -> init::LateResources {
         rtt_target::rtt_init_print!();
         rprintln!("rtic init started");
-
         let mut cp = cx.core;
+        let dp = cx.device;
 
         // Enable cycle counter; used for scheduling.
         cp.DWT.enable_cycle_counter();
 
-        let dp = cx.device;
+        // Freeze clock configuration.
         let mut flash = dp.FLASH.constrain();
         let mut rcc = dp.RCC.constrain();
-
-        // Freeze clock configuration.
         let clocks = rcc.cfgr.freeze(&mut flash.acr);
         rprintln!("sysclk: {:?} MHz", clocks.sysclk().0 / 1_000_000);
 
@@ -77,18 +74,26 @@ const APP: () = {
     }
 
     #[task(resources = [steps, led, scope], schedule = [blink_led])]
-    fn blink_led(mut cx: blink_led::Context) {
-        cx.resources.led.toggle().unwrap();
-        cx.resources.scope.toggle().unwrap();
-        let steps = cx.resources.steps.lock(|steps| *steps);
+    fn blink_led(cx: blink_led::Context) {
+        let blink_led::Resources {
+            mut steps,
+            led,
+            scope,
+        } = cx.resources;
+
+        led.toggle().unwrap();
+        scope.toggle().unwrap();
 
         // Schedule next blink.
+        let steps = steps.lock(|s| *s);
         let delay = Duration::from_cycles(CYCLES_PER_STEP * steps);
         cx.schedule.blink_led(cx.scheduled + delay).unwrap();
     }
 
     #[task(binds = EXTI15_10, priority = 2, resources = [button, steps])]
     fn button_press(cx: button_press::Context) {
+        rprintln!("button pressed");
+
         let button = cx.resources.button;
         if !button.check_interrupt() {
             return;
@@ -104,7 +109,8 @@ const APP: () = {
 
     // Unused interrupts for task scheduling.
     extern "C" {
-        fn EXTI0();
+        fn SPI1();
+        fn SPI2();
     }
 };
 
