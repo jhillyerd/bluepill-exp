@@ -30,11 +30,11 @@ const APP: () = {
     }
 
     #[init(spawn = [blink_led, poll_button])]
-    fn init(cx: init::Context) -> init::LateResources {
+    fn init(ctx: init::Context) -> init::LateResources {
         rtt_target::rtt_init_print!();
         rprintln!("RTIC init started");
-        let mut cp = cx.core;
-        let dp = cx.device;
+        let mut cp = ctx.core;
+        let dp = ctx.device;
 
         // Enable cycle counter; used for scheduling.
         cp.DWT.enable_cycle_counter();
@@ -87,8 +87,8 @@ const APP: () = {
         led_pwm.set_duty(pwm::Channel::C1, 0);
         led_pwm.enable(pwm::Channel::C1);
 
-        cx.spawn.poll_button().unwrap();
-        cx.spawn.blink_led().unwrap();
+        ctx.spawn.poll_button().unwrap();
+        ctx.spawn.blink_led().unwrap();
 
         // Prevent wait-for-interrupt (default rtic idle) from stalling debug features.
         //
@@ -113,20 +113,20 @@ const APP: () = {
     }
 
     #[task(resources = [steps, led], schedule = [blink_led])]
-    fn blink_led(cx: blink_led::Context) {
-        let blink_led::Resources { mut steps, led } = cx.resources;
+    fn blink_led(ctx: blink_led::Context) {
+        let blink_led::Resources { mut steps, led } = ctx.resources;
 
         led.toggle().unwrap();
 
         // Schedule next blink.
         let steps = steps.lock(|s| *s);
         let delay = Duration::from_cycles(CYCLES_PER_STEP * steps);
-        cx.schedule.blink_led(cx.scheduled + delay).unwrap();
+        ctx.schedule.blink_led(ctx.scheduled + delay).unwrap();
     }
 
     #[task(binds = TIM2, priority = 3, resources = [tim2, scope])]
-    fn toggle_scope(cx: toggle_scope::Context) {
-        let toggle_scope::Resources { tim2, scope } = cx.resources;
+    fn toggle_scope(ctx: toggle_scope::Context) {
+        let toggle_scope::Resources { tim2, scope } = ctx.resources;
 
         scope.toggle().unwrap();
         tim2.clear_update_interrupt_flag();
@@ -138,23 +138,23 @@ const APP: () = {
         spawn = [button_press],
         schedule = [poll_button]
     )]
-    fn poll_button(cx: poll_button::Context) {
+    fn poll_button(ctx: poll_button::Context) {
         // Button is active low.
-        let pressed = cx.resources.button.is_low().unwrap();
-        let edge = cx.resources.button_state.update(pressed);
+        let pressed = ctx.resources.button.is_low().unwrap();
+        let edge = ctx.resources.button_state.update(pressed);
         if edge == Some(debouncr::Edge::Rising) {
-            cx.spawn.button_press().unwrap();
+            ctx.spawn.button_press().unwrap();
         }
 
         // Schedule next button poll.
-        cx.schedule
-            .poll_button(cx.scheduled + BUTTON_POLL_PERIOD.cycles())
+        ctx.schedule
+            .poll_button(ctx.scheduled + BUTTON_POLL_PERIOD.cycles())
             .unwrap();
     }
 
     #[task(priority = 2, resources = [steps, pwm_level], spawn = [update_led_pwm])]
-    fn button_press(cx: button_press::Context) {
-        let button_press::Resources { steps, pwm_level } = cx.resources;
+    fn button_press(ctx: button_press::Context) {
+        let button_press::Resources { steps, pwm_level } = ctx.resources;
 
         // Increment steps.
         let old_steps = *steps;
@@ -164,15 +164,15 @@ const APP: () = {
         // Rotate pwm_level.
         let old_pwm_level = *pwm_level;
         *pwm_level = (old_pwm_level + 1) % PWM_LEVELS.len();
-        cx.spawn.update_led_pwm().unwrap();
+        ctx.spawn.update_led_pwm().unwrap();
     }
 
     #[task(resources = [pwm_level, led_pwm])]
-    fn update_led_pwm(cx: update_led_pwm::Context) {
+    fn update_led_pwm(ctx: update_led_pwm::Context) {
         let update_led_pwm::Resources {
             mut pwm_level,
             led_pwm,
-        } = cx.resources;
+        } = ctx.resources;
         let pwm_level = pwm_level.lock(|v| *v);
 
         let max_duty = led_pwm.get_max_duty();
