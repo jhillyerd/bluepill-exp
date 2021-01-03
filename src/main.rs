@@ -6,23 +6,27 @@ use embedded_hal::digital::v2::*;
 use rtic::app;
 use rtic::cyccnt::{Duration, U32Ext};
 use rtt_target::rprintln;
-use stm32f1xx_hal::{gpio::*, pac, prelude::*, pwm::Channel, rcc::Clocks, timer};
+use stm32f1xx_hal::{gpio::*, pac, prelude::*, pwm, rcc::Clocks, timer};
 
-const SYSCLK: u32 = 72_000_000;
-const BUTTON_POLL_PERIOD: u32 = SYSCLK / 100; // Hz
+const SYSCLK_HZ: u32 = 72_000_000;
+const BUTTON_POLL_PERIOD: u32 = SYSCLK_HZ / 100;
 const CYCLES_PER_STEP: u32 = 1_000_000;
 const MAX_STEPS: u32 = 10;
+const PWM_LEVELS: [u16; 8] = [0, 5, 10, 15, 25, 40, 65, 100];
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
         #[init(1)]
         steps: u32,
+        #[init(0)]
+        pwm_level: usize,
         tim2: timer::CountDownTimer<pac::TIM2>,
         led: gpioc::PC13<Output<PushPull>>,
         button: gpioa::PA10<Input<PullUp>>,
         button_state: Debouncer<u8, debouncr::Repeat6>,
         scope: gpioa::PA4<Output<PushPull>>,
+        led_pwm: pwm::Pwm<pac::TIM3, timer::Tim3NoRemap, pwm::C1, gpioa::PA6<Alternate<PushPull>>>,
     }
 
     #[init(spawn = [blink_led, poll_button])]
@@ -41,8 +45,8 @@ const APP: () = {
         let clocks: Clocks = rcc
             .cfgr
             .use_hse(8.mhz())
-            .sysclk(SYSCLK.hz())
-            .pclk1((SYSCLK / 2).hz())
+            .sysclk(SYSCLK_HZ.hz())
+            .pclk1((SYSCLK_HZ / 2).hz())
             .freeze(&mut flash.acr);
         rprintln!(" SYSCLK: {:?} MHz", clocks.sysclk().0 / 1_000_000);
         rprintln!(" HCLK: {:?} MHz", clocks.hclk().0 / 1_000_000);
@@ -75,14 +79,13 @@ const APP: () = {
         // Setup TIM3 PWM CH1 on PA6.
         let pa6 = gpioa.pa6.into_alternate_push_pull(&mut gpioa.crl);
         let pwm_pins = pa6;
-        let mut pwm = timer::Timer::tim3(dp.TIM3, &clocks, &mut rcc.apb1).pwm(
+        let mut led_pwm = timer::Timer::tim3(dp.TIM3, &clocks, &mut rcc.apb1).pwm(
             pwm_pins,
             &mut afio.mapr,
             1.khz(),
         );
-        let max_duty = pwm.get_max_duty();
-        pwm.set_duty(Channel::C1, max_duty / 4);
-        pwm.enable(Channel::C1);
+        led_pwm.set_duty(pwm::Channel::C1, 0);
+        led_pwm.enable(pwm::Channel::C1);
 
         cx.spawn.poll_button().unwrap();
         cx.spawn.blink_led().unwrap();
@@ -105,6 +108,7 @@ const APP: () = {
             button,
             button_state: debouncr::debounce_6(false),
             scope,
+            led_pwm,
         }
     }
 
@@ -148,13 +152,38 @@ const APP: () = {
             .unwrap();
     }
 
-    #[task(priority = 2, resources = [steps])]
+    #[task(priority = 2, resources = [steps, pwm_level], spawn = [update_led_pwm])]
     fn button_press(cx: button_press::Context) {
-        let steps = *cx.resources.steps;
-        let new_steps = (steps % MAX_STEPS) + 1;
-        *cx.resources.steps = new_steps;
+        let button_press::Resources { steps, pwm_level } = cx.resources;
 
-        rprintln!("steps: {} -> {}", steps, new_steps);
+        // Increment steps.
+        let old_steps = *steps;
+        *steps = (old_steps % MAX_STEPS) + 1;
+        rprintln!("steps: {} -> {}", old_steps, steps);
+
+        // Rotate pwm_level.
+        let old_pwm_level = *pwm_level;
+        *pwm_level = (old_pwm_level + 1) % PWM_LEVELS.len();
+        cx.spawn.update_led_pwm().unwrap();
+    }
+
+    #[task(resources = [pwm_level, led_pwm])]
+    fn update_led_pwm(cx: update_led_pwm::Context) {
+        let update_led_pwm::Resources {
+            mut pwm_level,
+            led_pwm,
+        } = cx.resources;
+        let pwm_level = pwm_level.lock(|v| *v);
+
+        let max_duty = led_pwm.get_max_duty();
+        let duty = max_duty / 100 * PWM_LEVELS[pwm_level];
+        led_pwm.set_duty(pwm::Channel::C1, duty);
+        rprintln!(
+            "led_pwm duty = {}% ({} / {})",
+            PWM_LEVELS[pwm_level],
+            duty,
+            max_duty
+        );
     }
 
     // Unused interrupts for task scheduling.
