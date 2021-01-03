@@ -11,4 +11,4 @@ cortex-m-rt = { version = "0.6.8", features = ["device"] }
 cortex-m-rtic = "0.5"
 embedded-hal = "0.2.3"
 rtt-target = { version = "0.3.0", features = ["cortex-m"] }
-stm32f1xx-hal = { version = "0.5.2", features = ["rt", "stm32f103" ] }
+stm32f1xx-hal = { version = "0.7", features = ["rt", "stm32f103" ] }

@@ -6,7 +6,7 @@ use embedded_hal::digital::v2::*;
 use rtic::app;
 use rtic::cyccnt::{Duration, U32Ext};
 use rtt_target::rprintln;
-use stm32f1xx_hal::{gpio::*, pac, prelude::*, rcc::Clocks, timer};
+use stm32f1xx_hal::{gpio::*, pac, prelude::*, pwm::Channel, rcc::Clocks, timer};
 
 const SYSCLK: u32 = 72_000_000;
 const BUTTON_POLL_PERIOD: u32 = SYSCLK / 100; // Hz
@@ -57,6 +57,7 @@ const APP: () = {
         tim2.listen(timer::Event::Update);
 
         // Peripheral setup.
+        let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
         let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
         let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
 
@@ -68,8 +69,20 @@ const APP: () = {
         let mut scope = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
         scope.set_low().unwrap(); // Oscill low
 
-        // Setup pa10 button interrupt.
+        // Setup pa10 button.
         let button = gpioa.pa10.into_pull_up_input(&mut gpioa.crh);
+
+        // Setup TIM3 PWM CH1 on PA6.
+        let pa6 = gpioa.pa6.into_alternate_push_pull(&mut gpioa.crl);
+        let pwm_pins = pa6;
+        let mut pwm = timer::Timer::tim3(dp.TIM3, &clocks, &mut rcc.apb1).pwm(
+            pwm_pins,
+            &mut afio.mapr,
+            1.khz(),
+        );
+        let max_duty = pwm.get_max_duty();
+        pwm.set_duty(Channel::C1, max_duty / 4);
+        pwm.enable(Channel::C1);
 
         cx.spawn.poll_button().unwrap();
         cx.spawn.blink_led().unwrap();
