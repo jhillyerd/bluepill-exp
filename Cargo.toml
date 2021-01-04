@@ -12,3 +12,7 @@ cortex-m-rtic = "0.5"
 embedded-hal = "0.2.3"
 rtt-target = { version = "0.3.0", features = ["cortex-m"] }
 stm32f1xx-hal = { version = "0.7", features = ["rt", "stm32f103" ] }
+
+# Optimize dependencies for a smaller debug binary.
+[profile.dev.package."*"]
+opt-level = "z"
