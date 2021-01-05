@@ -10,6 +10,7 @@ use stm32f1xx_hal::{gpio::*, pac, prelude::*, pwm, rcc::Clocks, timer};
 
 const SYSCLK_HZ: u32 = 72_000_000;
 const BUTTON_POLL_PERIOD: u32 = SYSCLK_HZ / 100;
+const RTT_POLL_PERIOD: u32 = SYSCLK_HZ / 5;
 const CYCLES_PER_STEP: u32 = 1_000_000;
 const MAX_STEPS: u32 = 10;
 const PWM_LEVELS: [u16; 8] = [0, 5, 10, 15, 25, 40, 65, 100];
@@ -27,16 +28,21 @@ const APP: () = {
         button_state: Debouncer<u8, debouncr::Repeat6>,
         scope: gpioa::PA4<Output<PushPull>>,
         led_pwm: pwm::Pwm<pac::TIM3, timer::Tim3NoRemap, pwm::C1, gpioa::PA6<Alternate<PushPull>>>,
+        // Used to read input from host over RTT.
+        rtt_down: rtt_target::DownChannel,
     }
 
-    #[init(spawn = [blink_led, poll_button])]
+    #[init(spawn = [blink_led, poll_button, read_input])]
     fn init(ctx: init::Context) -> init::LateResources {
-        rtt_target::rtt_init_print!();
+        // Initialize RTT communication with host.
+        let rtt_channels = rtt_target::rtt_init_default!();
+        rtt_target::set_print_channel(rtt_channels.up.0);
+
         rprintln!("RTIC init started");
         let mut cp = ctx.core;
         let dp = ctx.device;
 
-        // Enable cycle counter; used for scheduling.
+        // Enable CYCCNT; used for scheduling.
         cp.DWT.enable_cycle_counter();
 
         // Setup and apply clock confiugration.
@@ -87,8 +93,10 @@ const APP: () = {
         led_pwm.set_duty(pwm::Channel::C1, 0);
         led_pwm.enable(pwm::Channel::C1);
 
+        // Start scheduled tasks.
         ctx.spawn.poll_button().unwrap();
         ctx.spawn.blink_led().unwrap();
+        ctx.spawn.read_input().unwrap();
 
         // Prevent wait-for-interrupt (default rtic idle) from stalling debug features.
         //
@@ -102,6 +110,8 @@ const APP: () = {
 
         rprintln!("RTIC init completed");
 
+        rprintln!("You may enter a PWM frequency in HZ for PA6:");
+
         init::LateResources {
             led,
             tim2,
@@ -109,6 +119,7 @@ const APP: () = {
             button_state: debouncr::debounce_6(false),
             scope,
             led_pwm,
+            rtt_down: rtt_channels.down.0,
         }
     }
 
@@ -184,6 +195,36 @@ const APP: () = {
             duty,
             max_duty
         );
+    }
+
+    #[task(resources = [rtt_down, led_pwm], schedule = [read_input])]
+    fn read_input(ctx: read_input::Context) {
+        let read_input::Resources { rtt_down, led_pwm } = ctx.resources;
+
+        let mut buf = [0u8; 100];
+        let count = rtt_down.read(&mut buf);
+        if count > 1 {
+            // `count` bytes includes carriage return.
+            let mut input_num = 0i32;
+            for c in buf[..count - 1].iter() {
+                if '0' as u8 <= *c && *c <= '9' as u8 {
+                    input_num *= 10;
+                    input_num += (*c - '0' as u8) as i32;
+                } else {
+                    rprintln!("invalid numeral: '{}'", *c as char);
+                    input_num = -1;
+                    break;
+                }
+            }
+            if input_num >= 0 {
+                rprintln!("Setting LED pwm frequency to: {}", input_num);
+                led_pwm.set_period((input_num as u32).hz());
+            }
+        }
+
+        ctx.schedule
+            .read_input(ctx.scheduled + RTT_POLL_PERIOD.cycles())
+            .unwrap();
     }
 
     // Unused interrupts for task scheduling.
