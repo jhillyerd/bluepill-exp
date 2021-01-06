@@ -15,19 +15,21 @@ const CYCLES_PER_STEP: u32 = 1_000_000;
 const MAX_STEPS: u32 = 10;
 const PWM_LEVELS: [u16; 8] = [0, 5, 10, 15, 25, 40, 65, 100];
 
+type PwmLED = gpioa::PA6<Alternate<PushPull>>;
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
         #[init(1)]
         steps: u32,
         #[init(0)]
-        pwm_level: usize,
+        pwm_level: usize, // Index into PWM_LEVELS.
         tim2: timer::CountDownTimer<pac::TIM2>,
         led: gpioc::PC13<Output<PushPull>>,
         button: gpioa::PA10<Input<PullUp>>,
         button_state: Debouncer<u8, debouncr::Repeat6>,
         scope: gpioa::PA4<Output<PushPull>>,
-        led_pwm: pwm::Pwm<pac::TIM3, timer::Tim3NoRemap, pwm::C1, gpioa::PA6<Alternate<PushPull>>>,
+        led_pwm: pwm::Pwm<pac::TIM3, timer::Tim3NoRemap, pwm::C1, PwmLED>,
         // Used to read input from host over RTT.
         rtt_down: rtt_target::DownChannel,
     }
@@ -61,8 +63,8 @@ const APP: () = {
         rprintln!(" APB2 clk: {:?} MHz", clocks.pclk2().0 / 1_000_000);
         rprintln!(" ADCCLK: {:?} MHz", clocks.adcclk().0 / 1_000_000);
 
-        // Timer setup.
-        let mut tim2: timer::CountDownTimer<pac::TIM2> =
+        // Timer setup, fires TIM2 interrupt.
+        let mut tim2 =
             timer::Timer::tim2(dp.TIM2, &clocks, &mut rcc.apb1).start_count_down(2.khz());
         tim2.listen(timer::Event::Update);
 
