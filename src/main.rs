@@ -8,11 +8,18 @@ use rtic::cyccnt::{Duration, U32Ext};
 use rtt_target::rprintln;
 use stm32f1xx_hal::{gpio::*, pac, prelude::*, pwm, rcc::Clocks, timer};
 
+// Frequency of the system clock, which will also be the frequency of CYCCNT.
 const SYSCLK_HZ: u32 = 72_000_000;
+
+// Periods are measured in system clock cycles; smaller is more frequent.
 const BUTTON_POLL_PERIOD: u32 = SYSCLK_HZ / 100;
 const RTT_POLL_PERIOD: u32 = SYSCLK_HZ / 5;
+
+// Delay steps for onboard LED blink.
 const CYCLES_PER_STEP: u32 = 1_000_000;
 const MAX_STEPS: u32 = 10;
+
+// Levels for offboard PWM LED blink.
 const PWM_LEVELS: [u16; 8] = [0, 5, 10, 15, 25, 40, 65, 100];
 
 type PwmLED = gpioa::PA6<Alternate<PushPull>>;
