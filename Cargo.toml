@@ -5,11 +5,13 @@ authors = ["James Hillyerd <james@hillyerd.com>"]
 edition = "2018"
 
 [dependencies]
-debouncr = "0.2"
 cortex-m = "0.6"
 cortex-m-rt = { version = "0.6.8", features = ["device"] }
-cortex-m-rtic = "0.5"
+cortex-m-rtic = "0.6.0-alpha.0"
+debouncr = "0.2"
 embedded-hal = "0.2.3"
+mutex-trait = "0.2"
+rtic-core = "0.3"
 rtt-target = { version = "0.3.0", features = ["cortex-m"] }
 stm32f1xx-hal = { version = "0.7", features = ["rt", "stm32f103" ] }
 
