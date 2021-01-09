@@ -33,11 +33,11 @@ mod app {
     struct Resources {
         #[init(0)]
         pwm_level: usize, // Index into PWM_LEVELS.
-        tim2: timer::CountDownTimer<pac::TIM2>,
         led: gpioc::PC13<Output<PushPull>>,
         button: gpioa::PA10<Input<PullUp>>,
         button_state: Debouncer<u8, debouncr::Repeat6>,
         scope: gpioa::PA4<Output<PushPull>>,
+        scope_timer: timer::CountDownTimer<pac::TIM2>,
         led_pwm: pwm::Pwm<pac::TIM3, timer::Tim3NoRemap, pwm::C1, PwmLED>,
         ir_input: IRInput,
         // Used to read input from host over RTT.
@@ -73,10 +73,10 @@ mod app {
         rprintln!(" APB2 clk: {:?} MHz", clocks.pclk2().0 / 1_000_000);
         rprintln!(" ADCCLK: {:?} MHz", clocks.adcclk().0 / 1_000_000);
 
-        // Timer setup, fires TIM2 interrupt.
-        let mut tim2 =
+        // Scope timer setup, fires TIM2 interrupt.
+        let mut scope_timer =
             timer::Timer::tim2(dp.TIM2, &clocks, &mut rcc.apb1).start_count_down(2.khz());
-        tim2.listen(timer::Event::Update);
+        scope_timer.listen(timer::Event::Update);
 
         // Peripheral setup.
         let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
@@ -132,10 +132,10 @@ mod app {
 
         init::LateResources {
             led,
-            tim2,
             button,
             button_state: debouncr::debounce_6(false),
             scope,
+            scope_timer,
             led_pwm,
             ir_input,
             rtt_down: rtt_channels.down.0,
@@ -150,13 +150,13 @@ mod app {
         blink_led::schedule(ctx.scheduled + SYSCLK_HZ.cycles()).unwrap();
     }
 
-    #[task(binds = TIM2, priority = 3, resources = [tim2, scope])]
+    #[task(binds = TIM2, priority = 3, resources = [scope, scope_timer])]
     fn toggle_scope(ctx: toggle_scope::Context) {
-        let toggle_scope::Resources { tim2, scope } = ctx.resources;
+        let toggle_scope::Resources { scope, scope_timer } = ctx.resources;
 
-        (tim2, scope).lock(|tim2, scope| {
+        (scope, scope_timer).lock(|scope, scope_timer| {
             scope.toggle().unwrap();
-            tim2.clear_update_interrupt_flag();
+            scope_timer.clear_update_interrupt_flag();
         });
     }
 
