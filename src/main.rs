@@ -4,7 +4,7 @@
 use debouncr::Debouncer;
 use embedded_hal::digital::v2::*;
 use rtic::app;
-use rtic::cyccnt::{Duration, U32Ext};
+use rtic::cyccnt::U32Ext;
 use rtt_target::rprintln;
 use stm32f1xx_hal::{gpio::*, pac, prelude::*, pwm, rcc::Clocks, timer};
 
@@ -15,20 +15,15 @@ const SYSCLK_HZ: u32 = 72_000_000;
 const BUTTON_POLL_PERIOD: u32 = SYSCLK_HZ / 100;
 const RTT_POLL_PERIOD: u32 = SYSCLK_HZ / 5;
 
-// Delay steps for onboard LED blink.
-const CYCLES_PER_STEP: u32 = 1_000_000;
-const MAX_STEPS: u32 = 10;
-
 // Levels for offboard PWM LED blink.
 const PWM_LEVELS: [u16; 8] = [0, 5, 10, 15, 25, 40, 65, 100];
 
+type IRInput = gpiob::PB6<Input<Floating>>;
 type PwmLED = gpioa::PA6<Alternate<PushPull>>;
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        #[init(1)]
-        steps: u32,
         #[init(0)]
         pwm_level: usize, // Index into PWM_LEVELS.
         tim2: timer::CountDownTimer<pac::TIM2>,
@@ -37,6 +32,7 @@ const APP: () = {
         button_state: Debouncer<u8, debouncr::Repeat6>,
         scope: gpioa::PA4<Output<PushPull>>,
         led_pwm: pwm::Pwm<pac::TIM3, timer::Tim3NoRemap, pwm::C1, PwmLED>,
+        ir_input: IRInput,
         // Used to read input from host over RTT.
         rtt_down: rtt_target::DownChannel,
     }
@@ -78,6 +74,7 @@ const APP: () = {
         // Peripheral setup.
         let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
         let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
+        let mut gpiob = dp.GPIOB.split(&mut rcc.apb2);
         let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
 
         // Configure pc13 as output via CR high register.
@@ -88,8 +85,13 @@ const APP: () = {
         let mut scope = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
         scope.set_low().unwrap(); // Oscill low
 
-        // Setup pa10 button.
+        // Setup inputs.
         let button = gpioa.pa10.into_pull_up_input(&mut gpioa.crh);
+
+        let mut ir_input: IRInput = gpiob.pb6.into_floating_input(&mut gpiob.crl);
+        ir_input.make_interrupt_source(&mut afio);
+        ir_input.trigger_on_edge(&dp.EXTI, Edge::RISING_FALLING);
+        ir_input.enable_interrupt(&dp.EXTI);
 
         // Setup TIM3 PWM CH1 on PA6.
         let pa6 = gpioa.pa6.into_alternate_push_pull(&mut gpioa.crl);
@@ -128,20 +130,21 @@ const APP: () = {
             button_state: debouncr::debounce_6(false),
             scope,
             led_pwm,
+            ir_input,
             rtt_down: rtt_channels.down.0,
         }
     }
 
-    #[task(resources = [steps, led], schedule = [blink_led])]
+    #[task(resources = [led], schedule = [blink_led])]
     fn blink_led(ctx: blink_led::Context) {
-        let blink_led::Resources { mut steps, led } = ctx.resources;
+        let mut led = ctx.resources.led;
 
-        led.toggle().unwrap();
+        led.lock(|led| led.toggle().unwrap());
 
         // Schedule next blink.
-        let steps = steps.lock(|s| *s);
-        let delay = Duration::from_cycles(CYCLES_PER_STEP * steps);
-        ctx.schedule.blink_led(ctx.scheduled + delay).unwrap();
+        ctx.schedule
+            .blink_led(ctx.scheduled + SYSCLK_HZ.cycles())
+            .unwrap();
     }
 
     #[task(binds = TIM2, priority = 3, resources = [tim2, scope])]
@@ -172,14 +175,9 @@ const APP: () = {
             .unwrap();
     }
 
-    #[task(priority = 2, resources = [steps, pwm_level], spawn = [update_led_pwm])]
+    #[task(priority = 2, resources = [pwm_level], spawn = [update_led_pwm])]
     fn button_press(ctx: button_press::Context) {
-        let button_press::Resources { steps, pwm_level } = ctx.resources;
-
-        // Increment steps.
-        let old_steps = *steps;
-        *steps = (old_steps % MAX_STEPS) + 1;
-        rprintln!("steps: {} -> {}", old_steps, steps);
+        let button_press::Resources { pwm_level } = ctx.resources;
 
         // Rotate pwm_level.
         let old_pwm_level = *pwm_level;
@@ -234,6 +232,19 @@ const APP: () = {
         ctx.schedule
             .read_input(ctx.scheduled + RTT_POLL_PERIOD.cycles())
             .unwrap();
+    }
+
+    #[task(binds = EXTI9_5, priority = 2, resources = [ir_input, led])]
+    fn ir_trigger(ctx: ir_trigger::Context) {
+        let ir_input: &mut IRInput = ctx.resources.ir_input;
+        let led = ctx.resources.led;
+
+        if !ir_input.check_interrupt() {
+            return;
+        }
+        ir_input.clear_interrupt_pending_bit();
+
+        led.toggle().unwrap();
     }
 
     // Unused interrupts for task scheduling.
