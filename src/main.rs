@@ -3,6 +3,8 @@
 
 use rtt_target::rprintln;
 
+mod apple2009;
+
 #[rtic::app(
     device = stm32f1xx_hal::pac,
     peripherals = true,
@@ -10,8 +12,10 @@ use rtt_target::rprintln;
     dispatchers = [SPI1, SPI2]
 )]
 mod app {
+    use crate::apple2009::Apple2009;
     use debouncr::Debouncer;
     use embedded_hal::digital::v2::*;
+    use infrared::RemoteControl;
     use rtic::cyccnt::U32Ext;
     use rtic_core::prelude::*;
     use rtt_target::rprintln;
@@ -270,7 +274,13 @@ mod app {
             ir_timer.reset();
             match ir_recv.edge_event(ir_input.is_low().unwrap(), delta) {
                 Ok(None) => {}
-                Ok(Some(cmd)) => rprintln!("IR cmd: {:?}", cmd),
+                Ok(Some(cmd)) => {
+                    if let Some(button) = Apple2009::decode(cmd) {
+                        rprintln!("IR button: {:?}", button);
+                    } else {
+                        rprintln!("Unknown IR cmd: {:?}", cmd);
+                    }
+                }
                 Err(err) => rprintln!("IR error: {:?}", err),
             }
 
