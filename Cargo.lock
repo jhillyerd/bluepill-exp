@@ -57,6 +57,7 @@ dependencies = [
  "cortex-m-rtic",
  "debouncr",
  "embedded-hal",
+ "infrared",
  "mutex-trait",
  "rtic-core",
  "rtt-target",
@@ -236,6 +237,16 @@ checksum = "4fb1fa934250de4de8aef298d81c729a7d33d8c239daa3a7575e6b92bfc7313b"
 dependencies = [
  "autocfg",
  "hashbrown",
+]
+
+[[package]]
+name = "infrared"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87635dfca461b75536305cf1b18f60519645aa36300ab3c42d73f4b8c1c650e9"
+dependencies = [
+ "embedded-hal",
+ "nb 1.0.0",
 ]
 
 [[package]]

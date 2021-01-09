@@ -26,8 +26,11 @@ mod app {
 
     // Levels for offboard PWM LED blink.
     const PWM_LEVELS: [u16; 8] = [0, 5, 10, 15, 25, 40, 65, 100];
-    type IRInput = gpiob::PB6<Input<Floating>>;
     type PwmLED = gpioa::PA6<Alternate<PushPull>>;
+
+    // Infrared types.
+    type IRInput = gpiob::PB6<Input<Floating>>;
+    type IRProto = infrared::protocols::Nec;
 
     #[resources]
     struct Resources {
@@ -40,6 +43,8 @@ mod app {
         scope_timer: timer::CountDownTimer<pac::TIM2>,
         led_pwm: pwm::Pwm<pac::TIM3, timer::Tim3NoRemap, pwm::C1, PwmLED>,
         ir_input: IRInput,
+        ir_recv: infrared::EventReceiver<IRProto>,
+        ir_timer: timer::CountDownTimer<pac::TIM4>,
         // Used to read input from host over RTT.
         rtt_down: rtt_target::DownChannel,
     }
@@ -73,10 +78,11 @@ mod app {
         rprintln!(" APB2 clk: {:?} MHz", clocks.pclk2().0 / 1_000_000);
         rprintln!(" ADCCLK: {:?} MHz", clocks.adcclk().0 / 1_000_000);
 
-        // Scope timer setup, fires TIM2 interrupt.
+        // Countdown timer setup.
         let mut scope_timer =
             timer::Timer::tim2(dp.TIM2, &clocks, &mut rcc.apb1).start_count_down(2.khz());
         scope_timer.listen(timer::Event::Update);
+        let ir_timer = timer::Timer::tim4(dp.TIM4, &clocks, &mut rcc.apb1).start_count_down(1.hz());
 
         // Peripheral setup.
         let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
@@ -111,6 +117,9 @@ mod app {
         led_pwm.set_duty(pwm::Channel::C1, 0);
         led_pwm.enable(pwm::Channel::C1);
 
+        // Setup IR receiver, indicating we will report deltas in microseconds.
+        let ir_recv = infrared::EventReceiver::new(1_000_000);
+
         // Start scheduled tasks.
         poll_button::spawn().unwrap();
         blink_led::spawn().unwrap();
@@ -138,6 +147,8 @@ mod app {
             scope_timer,
             led_pwm,
             ir_input,
+            ir_recv,
+            ir_timer,
             rtt_down: rtt_channels.down.0,
         }
     }
@@ -239,16 +250,31 @@ mod app {
         read_input::schedule(ctx.scheduled + RTT_POLL_PERIOD.cycles()).unwrap();
     }
 
-    #[task(binds = EXTI9_5, priority = 2, resources = [ir_input, led])]
+    #[task(binds = EXTI9_5, priority = 2, resources = [ir_input, ir_timer, ir_recv, led])]
     fn ir_trigger(ctx: ir_trigger::Context) {
-        let ir_trigger::Resources { ir_input, led } = ctx.resources;
+        let ir_trigger::Resources {
+            ir_input,
+            ir_timer,
+            ir_recv,
+            led,
+        } = ctx.resources;
 
-        (ir_input, led).lock(|ir_input, led| {
+        (ir_input, ir_timer, ir_recv, led).lock(|ir_input, ir_timer, ir_recv, led| {
             if !ir_input.check_interrupt() {
                 return;
             }
             ir_input.clear_interrupt_pending_bit();
 
+            // Register edge with IR receiver.
+            let delta = ir_timer.micros_since();
+            ir_timer.reset();
+            match ir_recv.edge_event(ir_input.is_low().unwrap(), delta) {
+                Ok(None) => {}
+                Ok(Some(cmd)) => rprintln!("IR cmd: {:?}", cmd),
+                Err(err) => rprintln!("IR error: {:?}", err),
+            }
+
+            // Blink LED to indicate IR received.
             led.toggle().unwrap();
         });
     }
