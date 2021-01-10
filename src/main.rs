@@ -12,7 +12,7 @@ mod apple2009;
     dispatchers = [SPI1, SPI2]
 )]
 mod app {
-    use crate::apple2009::Apple2009;
+    use crate::{apple2009::Apple2009, Direction};
     use debouncr::Debouncer;
     use embedded_hal::digital::v2::*;
     use infrared::RemoteControl;
@@ -185,7 +185,7 @@ mod app {
             let pressed = button.is_low().unwrap();
             let edge = button_state.update(pressed);
             if edge == Some(debouncr::Edge::Rising) {
-                button_press::spawn().unwrap();
+                update_led_pwm::spawn(Direction::Up).unwrap();
             }
         });
 
@@ -193,23 +193,24 @@ mod app {
         poll_button::schedule(ctx.scheduled + BUTTON_POLL_PERIOD.cycles()).unwrap();
     }
 
-    #[task(priority = 2, resources = [pwm_level])]
-    fn button_press(ctx: button_press::Context) {
-        let button_press::Resources { mut pwm_level } = ctx.resources;
-
-        pwm_level.lock(|pwm_level| {
-            // Rotate pwm_level.
-            let old_pwm_level = *pwm_level;
-            *pwm_level = (old_pwm_level + 1) % PWM_LEVELS.len();
-            update_led_pwm::spawn().unwrap();
-        });
-    }
-
-    #[task(resources = [pwm_level, led_pwm])]
-    fn update_led_pwm(ctx: update_led_pwm::Context) {
+    #[task(capacity = 4, resources = [pwm_level, led_pwm])]
+    fn update_led_pwm(ctx: update_led_pwm::Context, dir: Direction) {
         let update_led_pwm::Resources { pwm_level, led_pwm } = ctx.resources;
 
         (pwm_level, led_pwm).lock(|pwm_level, led_pwm| {
+            // Rotate pwm_level.
+            *pwm_level = match dir {
+                Direction::Up => (*pwm_level + 1) % PWM_LEVELS.len(),
+                Direction::Down => {
+                    if *pwm_level == 0 {
+                        PWM_LEVELS.len() - 1
+                    } else {
+                        *pwm_level - 1
+                    }
+                }
+            };
+
+            // Set duty cycle.
             let max_duty = led_pwm.get_max_duty();
             let duty = max_duty / 100 * PWM_LEVELS[*pwm_level];
             led_pwm.set_duty(pwm::Channel::C1, duty);
@@ -285,6 +286,12 @@ mod app {
             led.toggle().unwrap();
         });
     }
+}
+
+#[derive(Debug)]
+pub enum Direction {
+    Down,
+    Up,
 }
 
 #[inline(never)]
