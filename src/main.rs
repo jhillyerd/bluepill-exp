@@ -275,6 +275,14 @@ mod app {
                 Ok(Some(cmd)) => {
                     if let Some(button) = Apple2009::decode(cmd) {
                         rprintln!("IR button: {:?}", button);
+                        // Adjust led_pwm if up or down pressed.
+                        match button {
+                            infrared::Button::Up => update_led_pwm::spawn(Direction::Up).unwrap(),
+                            infrared::Button::Down => {
+                                update_led_pwm::spawn(Direction::Down).unwrap()
+                            }
+                            _ => {}
+                        }
                     } else {
                         rprintln!("Unknown IR cmd: {:?}", cmd);
                     }
