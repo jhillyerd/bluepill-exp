@@ -46,8 +46,7 @@ mod app {
         scope: gpioa::PA4<Output<PushPull>>,
         scope_timer: timer::CountDownTimer<pac::TIM2>,
         led_pwm: pwm::Pwm<pac::TIM3, timer::Tim3NoRemap, pwm::C1, PwmLED>,
-        ir_input: IRInput,
-        ir_recv: infrared::EventReceiver<IRProto>,
+        ir_recv: infrared::hal::EventReceiver<IRProto, IRInput>,
         ir_timer: timer::CountDownTimer<pac::TIM4>,
         // Used to read input from host over RTT.
         rtt_down: rtt_target::DownChannel,
@@ -122,7 +121,7 @@ mod app {
         led_pwm.enable(pwm::Channel::C1);
 
         // Setup IR receiver, indicating we will report deltas in microseconds.
-        let ir_recv = infrared::EventReceiver::new(1_000_000);
+        let ir_recv = infrared::hal::EventReceiver::new(ir_input, 1_000_000);
 
         // Start scheduled tasks.
         poll_button::spawn().unwrap();
@@ -150,7 +149,6 @@ mod app {
             scope,
             scope_timer,
             led_pwm,
-            ir_input,
             ir_recv,
             ir_timer,
             rtt_down: rtt_channels.down.0,
@@ -254,25 +252,24 @@ mod app {
         read_input::schedule(ctx.scheduled + RTT_POLL_PERIOD.cycles()).unwrap();
     }
 
-    #[task(binds = EXTI9_5, priority = 2, resources = [ir_input, ir_timer, ir_recv, led])]
+    #[task(binds = EXTI9_5, priority = 2, resources = [ir_timer, ir_recv, led])]
     fn ir_trigger(ctx: ir_trigger::Context) {
         let ir_trigger::Resources {
-            ir_input,
             ir_timer,
             ir_recv,
             led,
         } = ctx.resources;
 
-        (ir_input, ir_timer, ir_recv, led).lock(|ir_input, ir_timer, ir_recv, led| {
-            if !ir_input.check_interrupt() {
+        (ir_timer, ir_recv, led).lock(|ir_timer, ir_recv, led| {
+            if !ir_recv.pin.check_interrupt() {
                 return;
             }
-            ir_input.clear_interrupt_pending_bit();
+            ir_recv.pin.clear_interrupt_pending_bit();
 
             // Register edge with IR receiver.
             let delta = ir_timer.micros_since();
             ir_timer.reset();
-            match ir_recv.edge_event(ir_input.is_low().unwrap(), delta) {
+            match ir_recv.edge_event(delta) {
                 Ok(None) => {}
                 Ok(Some(cmd)) => {
                     if let Some(button) = Apple2009::decode(cmd) {
